@@ -63,7 +63,8 @@ export const proxyFavicon = async ({ domain }: { domain: string; }) => {
   // List of alternative sources to fetch favicons
   const sources = [
     `https://www.google.com/s2/favicons?domain=${domain}`,
-    `https://icons.duckduckgo.com/ip3/${domain}.ico`
+    `https://icons.duckduckgo.com/ip3/${domain}.ico`,
+    `https://unavatar.io/${domain}`
     // `https://icon.horse/icon/${domain}`
   ];
   let response: Response = new Response("", {

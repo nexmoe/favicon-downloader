@@ -63,7 +63,7 @@ export async function GET(request: NextRequest, { params: { domain } }: { params
 
   let url = `http://${asciiDomain}`;
   try {
-    // Attempt to fetch favicons using HTTP
+    // 尝试使用 HTTP 获取图标
     data = await getFavicons({ url, headers });
     icons = data.icons;
   } catch (error) {
@@ -73,7 +73,7 @@ export async function GET(request: NextRequest, { params: { domain } }: { params
   if (icons.length === 0) {
     url = `https://${asciiDomain}`;
     try {
-      // Retry fetching favicons using HTTPS
+      // 尝试使用 HTTPS 获取图标
       const data = await getFavicons({ url, headers });
       icons = data.icons;
     } catch (error) {
@@ -81,7 +81,47 @@ export async function GET(request: NextRequest, { params: { domain } }: { params
     }
   }
 
-  // If no icons are found, fetch from alternative sources
+  // 如果子域名没有找到图标，尝试使用主域名
+  if (icons.length === 0) {
+    // 获取主域名的函数
+    const getMainDomain = (domain: string) => {
+      const parts = domain.split('.');
+      // 处理特殊的二级域名后缀，如 .gov.cn, .com.cn, .edu.cn 等
+      if (parts.length > 2 && 
+          ((parts[parts.length - 2] === 'gov' && parts[parts.length - 1] === 'cn') ||
+           (parts[parts.length - 2] === 'com' && parts[parts.length - 1] === 'cn') ||
+           (parts[parts.length - 2] === 'edu' && parts[parts.length - 1] === 'cn'))) {
+        return parts.slice(-3).join('.');
+      }
+      return parts.slice(-2).join('.');
+    };
+
+    const mainDomain = getMainDomain(asciiDomain);
+    if (mainDomain !== asciiDomain) {
+      try {
+        // 先尝试 HTTPS
+        const mainDomainData = await getFavicons({ 
+          url: `https://${mainDomain}`, 
+          headers 
+        });
+        icons = mainDomainData.icons;
+      } catch (error) {
+        console.error(error);
+        try {
+          // 如果 HTTPS 失败，尝试 HTTP
+          const mainDomainData = await getFavicons({ 
+            url: `http://${mainDomain}`, 
+            headers 
+          });
+          icons = mainDomainData.icons;
+        } catch (error) {
+          console.error(error);
+        }
+      }
+    }
+  }
+
+  // 如果仍然没有找到图标，使用备选方案
   if (icons.length === 0) {
     return proxyFavicon({ domain: asciiDomain });
   }
