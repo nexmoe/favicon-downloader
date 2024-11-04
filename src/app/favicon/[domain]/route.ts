@@ -7,6 +7,7 @@ export const runtime = 'edge';
 export async function GET(request: NextRequest, { params: { domain } }: { params: { domain: string } }) {
   let icons: { sizes?: string; href: string }[] = [];
   const larger: boolean = request.nextUrl.searchParams.get('larger') === 'true'; // Get the 'larger' parameter
+  const minSize: number = parseInt(request.nextUrl.searchParams.get('minSize') || '0', 10); // 添加最小尺寸参数
   let selectedIcon: { sizes?: string; href: string } | undefined;
 
   // Record start time
@@ -88,12 +89,42 @@ export async function GET(request: NextRequest, { params: { domain } }: { params
   // Select the appropriate icon based on the 'larger' parameter
   if (larger) {
     selectedIcon = icons.reduce((prev, curr) => {
-      const prevWidth = (prev.sizes || '0x0').split('x')[0];
-      const currWidth = (curr.sizes || '0x0').split('x')[0];
-      return Number(currWidth) > Number(prevWidth) ? curr : prev;
+      const prevWidth = parseInt((prev.sizes || '0x0').split('x')[0], 10);
+      const currWidth = parseInt((curr.sizes || '0x0').split('x')[0], 10);
+      
+      // 如果设置了最小尺寸，优先选择满足最小尺寸的图标
+      if (minSize > 0) {
+        if (currWidth >= minSize && (prevWidth < minSize || currWidth > prevWidth)) {
+          return curr;
+        }
+        if (currWidth > prevWidth) {
+          return curr;
+        }
+        return prev;
+      }
+      
+      return currWidth > prevWidth ? curr : prev;
     });
   } else {
-    selectedIcon = icons[0];
+    // 对于非larger模式，如果指定了最小尺寸，尝试找到满足要求的图标
+    if (minSize > 0) {
+      // 先尝试找到满足最小尺寸的图标
+      selectedIcon = icons.find(icon => {
+        const width = parseInt((icon.sizes || '0x0').split('x')[0], 10);
+        return width >= minSize;
+      });
+      
+      // 如果没找到满足最小尺寸的图标，就使用最大的那个
+      if (!selectedIcon) {
+        selectedIcon = icons.reduce((prev, curr) => {
+          const prevWidth = parseInt((prev.sizes || '0x0').split('x')[0], 10);
+          const currWidth = parseInt((curr.sizes || '0x0').split('x')[0], 10);
+          return currWidth > prevWidth ? curr : prev;
+        });
+      }
+    } else {
+      selectedIcon = icons[0];
+    }
   }
 
   try {
