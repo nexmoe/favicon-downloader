@@ -69,7 +69,8 @@
     "tsx": "^4.17.0",
     "typescript": "^5",
     "vercel": "^32.3.0",
-    "wrangler": "^3.70.0"
+    "wrangler": "^3.70.0",
+    "@typescript-eslint/eslint-plugin": "^8.2.0"
   },
   "pre-commit": [
     "generate-markdown-data",
