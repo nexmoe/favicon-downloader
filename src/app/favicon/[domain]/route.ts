@@ -1,12 +1,48 @@
 import { getFavicons, proxyFavicon } from '@/lib/server'
 import { ResponseInfo } from '@/types'
 import type { NextRequest } from 'next/server'
-export const runtime = 'edge'
+import sharp from 'sharp'
+
+async function hasTransparentEdges(imageData: ArrayBuffer): Promise<boolean> {
+	// 使用 sharp 库来处理图片
+	const image = sharp(Buffer.from(imageData));
+	const { width, height, channels } = await image.metadata();
+	
+	// 获取图片像素数据
+	const pixels = await image.raw().toBuffer();
+	
+	// 检查顶部和底部边缘
+	for (let x = 0; x < width; x++) {
+	  // 顶部边缘
+	  const topPixel = pixels.slice((x * channels), (x * channels) + channels);
+	  // 底部边缘
+	  const bottomPixel = pixels.slice(((height - 1) * width + x) * channels, ((height - 1) * width + x) * channels + channels);
+	  
+	  if (channels === 4 && (topPixel[3] === 0 || bottomPixel[3] === 0)) {
+		return true;
+	  }
+	}
+	
+	// 检查左右边缘
+	for (let y = 0; y < height; y++) {
+	  // 左边缘
+	  const leftPixel = pixels.slice((y * width) * channels, (y * width) * channels + channels);
+	  // 右边缘
+	  const rightPixel = pixels.slice((y * width + width - 1) * channels, (y * width + width - 1) * channels + channels);
+	  
+	  if (channels === 4 && (leftPixel[3] === 0 || rightPixel[3] === 0)) {
+		return true;
+	  }
+	}
+	
+	return false;
+  }
 
 export async function GET(request: NextRequest, { params: { domain } }: { params: { domain: string } }) {
 	let icons: { sizes?: string; href: string }[] = []
 	const larger: boolean = request.nextUrl.searchParams.get('larger') === 'true' // Get the 'larger' parameter
 	const minSize: number = parseInt(request.nextUrl.searchParams.get('minSize') || '0', 10) // 添加最小尺寸参数
+	const autoPadding: boolean = request.nextUrl.searchParams.get('autoPadding') === 'true' // 添加自动填充参数
 	let selectedIcon: { sizes?: string; href: string } | undefined
 
 	// Record start time
@@ -149,7 +185,7 @@ export async function GET(request: NextRequest, { params: { domain } }: { params
 	} else {
 		// 对于非larger模式，如果指定了最小尺寸，尝试找到满足要求的图标
 		if (minSize > 0) {
-			// 先尝试找到满足最小尺寸���图标
+			// 先尝试找到满足最小尺寸图标
 			selectedIcon = icons.find((icon) => {
 				const width = parseInt((icon.sizes || '0x0').split('x')[0], 10)
 				return width >= minSize
@@ -171,36 +207,72 @@ export async function GET(request: NextRequest, { params: { domain } }: { params
 	try {
 		if (selectedIcon.href.includes('data:image')) {
 			const base64Data = selectedIcon.href.split(',')[1]
-			const iconBuffer = Buffer.from(base64Data, 'base64')
-			// Calculate execution time
 			const endTime = Date.now()
 			const executionTime = endTime - startTime
 
-			return new Response(iconBuffer, {
+			// 解码base64数据来检查透明边缘
+			const buffer = Buffer.from(base64Data, 'base64')
+			const hasTransparentEdge = autoPadding ? await hasTransparentEdges(buffer) : false
+			
+			// 计算边距和图像尺寸
+			const padding = (autoPadding && hasTransparentEdge) ? 10 : 0
+			const imageSize = 100 - (padding * 2)
+
+			// 创建带边距的SVG包装
+			const svgWrapper = `
+			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+				<defs>
+					<pattern id="img" x="${padding}" y="${padding}" width="${imageSize}" height="${imageSize}" patternUnits="userSpaceOnUse">
+						<image x="0" y="0" width="${imageSize}" height="${imageSize}" preserveAspectRatio="xMidYMid meet" 
+							href="data:${selectedIcon.href.replace(/data:(image.*?);.*/, '$1')};base64,${base64Data}"/>
+					</pattern>
+				</defs>
+				<rect width="100" height="100" fill="transparent"/>
+				<rect x="${padding}" y="${padding}" width="${imageSize}" height="${imageSize}" fill="url(#img)"/>
+			</svg>`
+
+			return new Response(svgWrapper, {
 				status: 200,
 				headers: {
 					'Cache-Control': 'public, max-age=86400',
-					'Content-Type': selectedIcon.href.replace(/data:(image.*?);.*/, '$1'),
-					'Content-Length': iconBuffer.byteLength.toString(),
-					'X-Execution-Time': `${executionTime} ms`, // Add execution time header
+					'Content-Type': 'image/svg+xml',
+					'X-Execution-Time': `${executionTime} ms`,
 				},
 			})
 		}
-		const iconResponse = await fetch(selectedIcon.href, { headers })
-		// Calculate execution time
-		const endTime = Date.now()
-		const executionTime = endTime - startTime
-		if (!iconResponse.ok) return svg404()
-		const iconBuffer = await iconResponse.arrayBuffer()
 
-		// Return the image response with execution time
-		return new Response(iconBuffer, {
+		const iconResponse = await fetch(selectedIcon.href, { headers });
+		const endTime = Date.now();
+		const executionTime = endTime - startTime;
+		if (!iconResponse.ok) return svg404();
+		const iconBuffer = await iconResponse.arrayBuffer();
+		const contentType = iconResponse.headers.get('Content-Type') || 'image/png';
+
+		// 只在 autoPadding 为 true 时才检查边缘
+		const hasTransparentEdge = autoPadding ? await hasTransparentEdges(iconBuffer) : false;
+		
+		// 只有当 autoPadding 为 true 且有透明边缘时才添加边距
+		const padding = (autoPadding && hasTransparentEdge) ? 10 : 0;
+		const imageSize = 100 - (padding * 2);
+		
+		const svgWrapper = `
+		<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+			<defs>
+				<pattern id="img" x="${padding}" y="${padding}" width="${imageSize}" height="${imageSize}" patternUnits="userSpaceOnUse">
+					<image x="0" y="0" width="${imageSize}" height="${imageSize}" preserveAspectRatio="xMidYMid meet" 
+						href="data:${contentType};base64,${Buffer.from(iconBuffer).toString('base64')}"/>
+				</pattern>
+			</defs>
+			<rect width="100" height="100" fill="transparent"/>
+			<rect x="${padding}" y="${padding}" width="${imageSize}" height="${imageSize}" fill="url(#img)"/>
+		</svg>`;
+
+		return new Response(svgWrapper, {
 			status: 200,
 			headers: {
 				'Cache-Control': 'public, max-age=86400',
-				'Content-Type': iconResponse.headers.get('Content-Type') || 'image/png',
-				'Content-Length': iconBuffer.byteLength.toString(),
-				'X-Execution-Time': `${executionTime}ms`, // Add execution time header
+				'Content-Type': 'image/svg+xml',
+				'X-Execution-Time': `${executionTime}ms`,
 			},
 		})
 	} catch (error) {
