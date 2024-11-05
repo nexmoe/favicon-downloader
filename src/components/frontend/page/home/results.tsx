@@ -1,70 +1,9 @@
 "use client";
-import { Button } from '@/components/ui/button';
-import { getBase64MimeType, getImageMimeType, isBrowser } from '@/lib/utils';
+import { getBase64MimeType, isBrowser } from '@/lib/utils';
 import { ResponseInfo } from '@/types';
 import { SearchCheckIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useCallback, useEffect, useRef, useState } from 'react';
-
-function fetchImage(url: string): Promise<{ blob: Blob, extension: string }> {
-  return fetch(url).then(response => {
-    const contentType = response.headers.get('Content-Type') || '';
-    const extension = getImageMimeType(contentType);
-    return response.blob().then(blob => ({ blob, extension }));
-  });
-}
-
-const downloadImagesAsZip = (icons: { href: string, sizes?: string }[], domain: string) => {
-  if (typeof window === 'undefined' || !window.navigator) {
-    console.warn('Download is not available in this environment');
-    return;
-  }
-
-  Promise.all([
-    import('jszip'),
-    import('file-saver')
-  ]).then(([JSZipModule, FileSaverModule]) => {
-    const JSZip = JSZipModule.default;
-    const zip = new JSZip();
-    const folder = zip.folder(`${domain}-images`);
-    const saveAs =  FileSaverModule.default || FileSaverModule.saveAs;
-    if (typeof saveAs !== 'function') {
-      console.error('saveAs is not a function', FileSaverModule);
-      return;
-    }
-
-    const addBase64Image = ({ base64Data, index, sizes }: { base64Data: string; index: number, sizes?: string; }) => {
-      const data = base64Data.split(',')[1];
-      const extension = getBase64MimeType(base64Data);
-      const filename = `favicon-${domain}-${index + 1}-${sizes}.${extension}`;
-      folder!.file(filename, data, { base64: true });
-    };
-
-    const addUrlImage = ({ href, index, sizes }: { href: string; index: number, sizes?: string; }): Promise<void> => {
-      return fetchImage(href).then(({ blob, extension }) => {
-        const filename = `favicon-${domain}-${index + 1}-${sizes}.${extension}`;
-        folder!.file(filename, blob);
-      });
-    };
-
-    const imagePromises = icons.map(({ href, sizes }, index) => {
-      if (/^data:image\//.test(href)) {
-        return addBase64Image({ base64Data: href, index, sizes });
-      } else {
-        return addUrlImage({ href: `/download/${href}`, index, sizes });
-      }
-    });
-
-    Promise.all(imagePromises)
-      .then(() => zip.generateAsync({ type: 'blob' }))
-      .then(content => saveAs(content, `${domain}-favicons.zip`))
-      .catch(error => {
-        console.error('Error creating or saving zip:', error);
-      });
-  }).catch(error => {
-    console.error('Failed to load required modules:', error);
-  });
-};
 
 const IconImage = ({ icon, index, onLoad, domain }: { icon: any; index: number; domain: string; onLoad?: (sizes: string) => void }) => {
   const [sizes, setSizes] = useState<string>(icon.sizes);
@@ -139,14 +78,6 @@ export const Results = ({ info }: { info: ResponseInfo }) => {
   const t = useTranslations();
   const [iconInfo, setIconInfo] = useState<ResponseInfo>(info);
 
-  const handleDownloadZip = useCallback(() => {
-    if (typeof window === 'undefined' || !window.navigator) {
-      console.warn('Download is not available in this environment');
-      return;
-    }
-    downloadImagesAsZip(iconInfo.icons, iconInfo.host);
-  }, [iconInfo.icons, iconInfo.host]);
-
   const iconOnLoad = useCallback(({ sizes, iconIndex }: { sizes: string; iconIndex: number }) => {
     setIconInfo(prevInfo => ({
       ...prevInfo,
@@ -174,12 +105,6 @@ export const Results = ({ info }: { info: ResponseInfo }) => {
           </div>
         ))}
       </div>
-      <Button
-        onClick={handleDownloadZip}
-        className="rounded-md w-[50%] mx-auto font-semibold"
-      >
-        {t('frontend.home.download_zip')}
-      </Button>
     </div>
   );
 };
