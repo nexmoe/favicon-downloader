@@ -79,6 +79,7 @@ export async function GET(request: NextRequest, { params: { domain } }: { params
 	const larger: boolean = request.nextUrl.searchParams.get('larger') === 'true' // Get the 'larger' parameter
 	const minSize: number = parseInt(request.nextUrl.searchParams.get('minSize') || '0', 10) // 添加最小尺寸参数
 	const autoPadding: boolean = request.nextUrl.searchParams.get('autoPadding') === 'true' // 添加自动填充参数
+	const rounded: number = parseInt(request.nextUrl.searchParams.get('rounded') || '0', 10) // 添加圆角参数
 	let selectedIcon: { sizes?: string; href: string } | undefined
 
 	// Record start time
@@ -244,30 +245,29 @@ export async function GET(request: NextRequest, { params: { domain } }: { params
 	try {
 		const endTime = Date.now();
 		const executionTime = endTime - startTime;
-
+		
+		let base64Data: string;
+		let contentType: string;
+		let buffer: ArrayBuffer;
+		
 		if (selectedIcon.href.includes('data:image')) {
-			const base64Data = selectedIcon.href.split(',')[1];
-			const buffer = Buffer.from(base64Data, 'base64');
-			const hasTransparentEdge = autoPadding ? await hasTransparentEdges(buffer) : false;
-			const padding = (autoPadding && hasTransparentEdge) ? 10 : 0;
-			const contentType = selectedIcon.href.replace(/data:(image.*?);.*/, '$1');
-
-			const svgWrapper = createSvgWrapper(base64Data, contentType, padding);
-			return createSvgResponse(svgWrapper, executionTime);
+			base64Data = selectedIcon.href.split(',')[1];
+			buffer = Buffer.from(base64Data, 'base64');
+			contentType = selectedIcon.href.replace(/data:(image.*?);.*/, '$1');
+		} else {
+			const iconResponse = await fetch(selectedIcon.href, { headers });
+			if (!iconResponse.ok) return svg404();
+			
+			buffer = await iconResponse.arrayBuffer();
+			contentType = iconResponse.headers.get('Content-Type') || 'image/png';
+			base64Data = Buffer.from(buffer).toString('base64');
 		}
-
-		const iconResponse = await fetch(selectedIcon.href, { headers });
-		if (!iconResponse.ok) return svg404();
-
-		const iconBuffer = await iconResponse.arrayBuffer();
-		const contentType = iconResponse.headers.get('Content-Type') || 'image/png';
-		const hasTransparentEdge = autoPadding ? await hasTransparentEdges(iconBuffer) : false;
+		
+		const hasTransparentEdge = autoPadding ? await hasTransparentEdges(buffer) : false;
 		const padding = (autoPadding && hasTransparentEdge) ? 10 : 0;
-		const base64Data = Buffer.from(iconBuffer).toString('base64');
-
+		
 		const svgWrapper = createSvgWrapper(base64Data, contentType, padding);
 		return createSvgResponse(svgWrapper, executionTime);
-
 	} catch (error) {
 		console.error(`Error fetching the selected icon:`, error);
 		return new Response('Failed to fetch the icon', { status: 500 });
