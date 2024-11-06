@@ -1,67 +1,7 @@
-import { getFavicons, proxyFavicon } from '@/lib/server'
+import { getFavicons, proxyFavicon, hasTransparentEdges } from '@/lib/server'
 import { ResponseInfo } from '@/types'
 import type { NextRequest } from 'next/server'
-import sharp from 'sharp'
-import { LRUCache } from 'lru-cache'
 
-// 创建LRU缓存实例
-const transparencyCache = new LRUCache<string, boolean>({
-	max: 5000, // 最多缓存5000个结果
-	ttl: 1000 * 60 * 60 * 24, // 24小时过期
-})
-
-async function hasTransparentEdges(imageData: ArrayBuffer): Promise<boolean> {
-	// 使用图片数据的哈希作为缓存key
-	const cacheKey = Buffer.from(imageData).toString('base64').slice(0, 50) // 只取前50个字符作为key
-	
-	// 检查缓存
-	const cachedResult = transparencyCache.get(cacheKey)
-	if (cachedResult !== undefined) {
-		return cachedResult
-	}
-
-	// 如果缓存中没有,执行透明度检查
-	try {
-		const image = sharp(Buffer.from(imageData))
-		const { width, height, channels } = await image.metadata()
-		
-		// 获取图片像素数据
-		const pixels = await image.raw().toBuffer()
-		
-		let result = false
-
-		// 检查顶部和底部边缘
-		for (let x = 0; x < width!; x++) {
-			const topPixel = pixels.slice((x * channels!), (x * channels!) + channels!)
-			const bottomPixel = pixels.slice(((height! - 1) * width! + x) * channels!, ((height! - 1) * width! + x) * channels! + channels!)
-			
-			if (channels === 4 && (topPixel[3] === 0 || bottomPixel[3] === 0)) {
-				result = true
-				break
-			}
-		}
-
-		if (!result) {
-			// 检查左右边缘
-			for (let y = 0; y < height!; y++) {
-				const leftPixel = pixels.slice((y * width!) * channels!, (y * width!) * channels! + channels!)
-				const rightPixel = pixels.slice((y * width! + width! - 1) * channels!, (y * width! + width! - 1) * channels! + channels!)
-				
-				if (channels === 4 && (leftPixel[3] === 0 || rightPixel[3] === 0)) {
-					result = true
-					break
-				}
-			}
-		}
-
-		// 缓存结果
-		transparencyCache.set(cacheKey, result)
-		return result
-	} catch (error) {
-		console.error('Error checking transparent edges:', error)
-		return false
-	}
-}
 
 async function tryGetFavicons(protocol: string, domain: string, headers: Headers) {
 	try {
@@ -160,7 +100,7 @@ export async function GET(request: NextRequest, { params: { domain } }: { params
 		if (mainDomain !== asciiDomain) {
 			// 先尝试 HTTPS，失败后尝试 HTTP
 			icons = await tryGetFavicons('https', mainDomain, headers)
-			
+
 			if (icons.length === 0) {
 				icons = await tryGetFavicons('http', mainDomain, headers)
 			}
@@ -213,79 +153,64 @@ export async function GET(request: NextRequest, { params: { domain } }: { params
 		}
 	}
 
-	try {
-		if (selectedIcon.href.includes('data:image')) {
-			const base64Data = selectedIcon.href.split(',')[1]
-			const endTime = Date.now()
-			const executionTime = endTime - startTime
-
-			// 解码base64数据来检查透明边缘
-			const buffer = Buffer.from(base64Data, 'base64')
-			const hasTransparentEdge = autoPadding ? await hasTransparentEdges(buffer) : false
-			
-			// 计算边距和图像尺寸
-			const padding = (autoPadding && hasTransparentEdge) ? 10 : 0
-			const imageSize = 100 - (padding * 2)
-
-			// 创建带边距的SVG包装
-			const svgWrapper = `
+	// 提取创建SVG包装的通用函数
+	function createSvgWrapper(imageData: string, contentType: string, padding: number) {
+		const imageSize = 100 - (padding * 2);
+		return `
 			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
 				<defs>
 					<pattern id="img" x="${padding}" y="${padding}" width="${imageSize}" height="${imageSize}" patternUnits="userSpaceOnUse">
 						<image x="0" y="0" width="${imageSize}" height="${imageSize}" preserveAspectRatio="xMidYMid meet" 
-							href="data:${selectedIcon.href.replace(/data:(image.*?);.*/, '$1')};base64,${base64Data}"/>
+							href="data:${contentType};base64,${imageData}"/>
 					</pattern>
 				</defs>
 				<rect width="100" height="100" fill="transparent"/>
 				<rect x="${padding}" y="${padding}" width="${imageSize}" height="${imageSize}" fill="url(#img)"/>
-			</svg>`
+			</svg>`;
+	}
 
-			return new Response(svgWrapper, {
-				status: 200,
-				headers: {
-					'Cache-Control': 'public, max-age=86400',
-					'Content-Type': 'image/svg+xml',
-					'X-Execution-Time': `${executionTime} ms`,
-				},
-			})
-		}
-
-		const iconResponse = await fetch(selectedIcon.href, { headers });
-		const endTime = Date.now();
-		const executionTime = endTime - startTime;
-		if (!iconResponse.ok) return svg404();
-		const iconBuffer = await iconResponse.arrayBuffer();
-		const contentType = iconResponse.headers.get('Content-Type') || 'image/png';
-
-		// 只在 autoPadding 为 true 时才检查边缘
-		const hasTransparentEdge = autoPadding ? await hasTransparentEdges(iconBuffer) : false;
-		
-		// 只有当 autoPadding 为 true 且有透明边缘时才添加边距
-		const padding = (autoPadding && hasTransparentEdge) ? 10 : 0;
-		const imageSize = 100 - (padding * 2);
-		
-		const svgWrapper = `
-		<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
-			<defs>
-				<pattern id="img" x="${padding}" y="${padding}" width="${imageSize}" height="${imageSize}" patternUnits="userSpaceOnUse">
-					<image x="0" y="0" width="${imageSize}" height="${imageSize}" preserveAspectRatio="xMidYMid meet" 
-						href="data:${contentType};base64,${Buffer.from(iconBuffer).toString('base64')}"/>
-				</pattern>
-			</defs>
-			<rect width="100" height="100" fill="transparent"/>
-			<rect x="${padding}" y="${padding}" width="${imageSize}" height="${imageSize}" fill="url(#img)"/>
-		</svg>`;
-
-		return new Response(svgWrapper, {
+	// 提取创建Response的通用函数
+	function createSvgResponse(svgContent: string, executionTime: number) {
+		return new Response(svgContent, {
 			status: 200,
 			headers: {
 				'Cache-Control': 'public, max-age=86400',
 				'Content-Type': 'image/svg+xml',
 				'X-Execution-Time': `${executionTime}ms`,
 			},
-		})
+		});
+	}
+
+	try {
+		const endTime = Date.now();
+		const executionTime = endTime - startTime;
+
+		if (selectedIcon.href.includes('data:image')) {
+			const base64Data = selectedIcon.href.split(',')[1];
+			const buffer = Buffer.from(base64Data, 'base64');
+			const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+			const hasTransparentEdge = autoPadding ? await hasTransparentEdges(arrayBuffer) : false;
+			const padding = (autoPadding && hasTransparentEdge) ? 10 : 0;
+			const contentType = selectedIcon.href.replace(/data:(image.*?);.*/, '$1');
+
+			const svgWrapper = createSvgWrapper(base64Data, contentType, padding);
+			return createSvgResponse(svgWrapper, executionTime);
+		}
+
+		const iconResponse = await fetch(selectedIcon.href, { headers });
+		if (!iconResponse.ok) return svg404();
+
+		const iconBuffer = await iconResponse.arrayBuffer();
+		const contentType = iconResponse.headers.get('Content-Type') || 'image/png';
+		const hasTransparentEdge = autoPadding ? await hasTransparentEdges(iconBuffer) : false;
+		const padding = (autoPadding && hasTransparentEdge) ? 10 : 0;
+		const base64Data = Buffer.from(iconBuffer).toString('base64');
+
+		const svgWrapper = createSvgWrapper(base64Data, contentType, padding);
+		return createSvgResponse(svgWrapper, executionTime);
+
 	} catch (error) {
-		console.error(`Error fetching the selected icon: ${error}`)
-		return new Response('Failed to fetch the icon', { status: 500 })
+		console.error(`Error fetching the selected icon:`, error);
+		return new Response('Failed to fetch the icon', { status: 500 });
 	}
 }
