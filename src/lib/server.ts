@@ -3,7 +3,7 @@ import { ResponseInfo } from "@/types";
 // Fetch favicons from a given URL and return ResponseInfo
 export const getFavicons = async ({ url, headers }: { url: string, headers?: Headers }): Promise<ResponseInfo> => {
   const newUrl = new URL(url); // Create a URL object to extract the host
-
+  console.log("getFavicons", newUrl.toString())
   try {
     // Perform the fetch request with optional headers and redirection follow
     const response = await fetch(newUrl.toString(), {
@@ -32,9 +32,13 @@ export const getFavicons = async ({ url, headers }: { url: string, headers?: Hea
       const sizes = sizesMatch ? sizesMatch[1] : null;
 
       if (href) {
+        let newHref = (href.startsWith('http') || href.startsWith('data:image')) ? href : `${responseUrl.protocol}//${responseUrl.host}${/^\/.*/.test(href) ? href : `/${href}`}`
+        if (href.startsWith('//')) {
+          newHref = `${responseUrl.protocol}${href}`
+        }
         icons.push({
           sizes: sizes || 'unknown',
-          href: (href.startsWith('http') || href.startsWith('data:image')) ? href : `${responseUrl.protocol}//${responseUrl.host}${/^\/.*/.test(href) ? href : `/${href}`}`
+          href: newHref
         });
       }
     });
@@ -60,9 +64,9 @@ export const getFavicons = async ({ url, headers }: { url: string, headers?: Hea
 
 // Function to fetch favicon from alternative sources
 export const proxyFavicon = async ({ domain }: { domain: string; }) => {
+  console.log("proxyFavicon", domain)
   // List of alternative sources to fetch favicons
   const sources = [
-    `https://unavatar.io/${domain}`,
     `https://www.google.com/s2/favicons?domain=${domain}`,
     `https://icons.duckduckgo.com/ip3/${domain}.ico`,
     // `https://icon.horse/icon/${domain}`

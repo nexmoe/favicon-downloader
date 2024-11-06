@@ -63,6 +63,17 @@ async function hasTransparentEdges(imageData: ArrayBuffer): Promise<boolean> {
 	}
 }
 
+async function tryGetFavicons(protocol: string, domain: string, headers: Headers) {
+	try {
+		const url = `${protocol}://${domain}`
+		const data = await getFavicons({ url, headers })
+		return data.icons
+	} catch (error) {
+		console.error(`Error fetching icons with ${protocol}:`, error)
+		return []
+	}
+}
+
 export async function GET(request: NextRequest, { params: { domain } }: { params: { domain: string } }) {
 	let icons: { sizes?: string; href: string }[] = []
 	const larger: boolean = request.nextUrl.searchParams.get('larger') === 'true' // Get the 'larger' parameter
@@ -121,24 +132,11 @@ export async function GET(request: NextRequest, { params: { domain } }: { params
 	headers.delete('host')
 	headers.delete('Content-Length')
 
-	let url = `http://${asciiDomain}`
-	try {
-		// 尝试使用 HTTP 获取图标
-		data = await getFavicons({ url, headers })
-		icons = data.icons
-	} catch (error) {
-		console.error(error)
-	}
-
+	// 在 GET 函数中替换原有代码
+	icons = await tryGetFavicons('https', asciiDomain, headers)
+	console.log("icons", icons)
 	if (icons.length === 0) {
-		url = `https://${asciiDomain}`
-		try {
-			// 尝试使用 HTTPS 获取图标
-			const data = await getFavicons({ url, headers })
-			icons = data.icons
-		} catch (error) {
-			console.error(error)
-		}
+		icons = await tryGetFavicons('http', asciiDomain, headers)
 	}
 
 	// 如果子域名没有找到图标，尝试使用主域名
@@ -160,25 +158,11 @@ export async function GET(request: NextRequest, { params: { domain } }: { params
 
 		const mainDomain = getMainDomain(asciiDomain)
 		if (mainDomain !== asciiDomain) {
-			try {
-				// 先尝试 HTTPS
-				const mainDomainData = await getFavicons({
-					url: `https://${mainDomain}`,
-					headers,
-				})
-				icons = mainDomainData.icons
-			} catch (error) {
-				console.error(error)
-				try {
-					// 如果 HTTPS 失败，尝试 HTTP
-					const mainDomainData = await getFavicons({
-						url: `http://${mainDomain}`,
-						headers,
-					})
-					icons = mainDomainData.icons
-				} catch (error) {
-					console.error(error)
-				}
+			// 先尝试 HTTPS，失败后尝试 HTTP
+			icons = await tryGetFavicons('https', mainDomain, headers)
+			
+			if (icons.length === 0) {
+				icons = await tryGetFavicons('http', mainDomain, headers)
 			}
 		}
 	}
