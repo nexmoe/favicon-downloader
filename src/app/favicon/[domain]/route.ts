@@ -1,7 +1,67 @@
-import { getFavicons, proxyFavicon, hasTransparentEdges } from '@/lib/server'
+import { getFavicons, proxyFavicon } from '@/lib/server'
 import { ResponseInfo } from '@/types'
+import { LRUCache } from 'lru-cache'
 import type { NextRequest } from 'next/server'
+import sharp from 'sharp'
 
+// 创建LRU缓存实例
+const transparencyCache = new LRUCache<string, boolean>({
+	max: 5000, // 最多缓存5000个结果
+	ttl: 1000 * 60 * 60 * 24, // 24小时过期
+})
+
+async function hasTransparentEdges(imageData: ArrayBuffer): Promise<boolean> {
+	// 使用图片数据的哈希作为缓存key
+	const cacheKey = Buffer.from(imageData).toString('base64').slice(0, 50) // 只取前50个字符作为key
+
+	// 检查缓存
+	const cachedResult = transparencyCache.get(cacheKey)
+	if (cachedResult !== undefined) {
+		return cachedResult
+	}
+
+	// 如果缓存中没有,执行透明度检查
+	try {
+		const image = sharp(Buffer.from(imageData))
+		const { width, height, channels } = await image.metadata()
+
+		// 获取图片像素数据
+		const pixels = await image.raw().toBuffer()
+
+		let result = false
+
+		// 检查顶部和底部边缘
+		for (let x = 0; x < width!; x++) {
+			const topPixel = pixels.slice((x * channels!), (x * channels!) + channels!)
+			const bottomPixel = pixels.slice(((height! - 1) * width! + x) * channels!, ((height! - 1) * width! + x) * channels! + channels!)
+
+			if (channels === 4 && (topPixel[3] === 0 || bottomPixel[3] === 0)) {
+				result = true
+				break
+			}
+		}
+
+		if (!result) {
+			// 检查左右边缘
+			for (let y = 0; y < height!; y++) {
+				const leftPixel = pixels.slice((y * width!) * channels!, (y * width!) * channels! + channels!)
+				const rightPixel = pixels.slice((y * width! + width! - 1) * channels!, (y * width! + width! - 1) * channels! + channels!)
+
+				if (channels === 4 && (leftPixel[3] === 0 || rightPixel[3] === 0)) {
+					result = true
+					break
+				}
+			}
+		}
+
+		// 缓存结果
+		transparencyCache.set(cacheKey, result)
+		return result
+	} catch (error) {
+		console.error('Error checking transparent edges:', error)
+		return false
+	}
+}
 
 async function tryGetFavicons(protocol: string, domain: string, headers: Headers) {
 	try {
@@ -188,8 +248,7 @@ export async function GET(request: NextRequest, { params: { domain } }: { params
 		if (selectedIcon.href.includes('data:image')) {
 			const base64Data = selectedIcon.href.split(',')[1];
 			const buffer = Buffer.from(base64Data, 'base64');
-			const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
-			const hasTransparentEdge = autoPadding ? await hasTransparentEdges(arrayBuffer) : false;
+			const hasTransparentEdge = autoPadding ? await hasTransparentEdges(buffer) : false;
 			const padding = (autoPadding && hasTransparentEdge) ? 10 : 0;
 			const contentType = selectedIcon.href.replace(/data:(image.*?);.*/, '$1');
 
